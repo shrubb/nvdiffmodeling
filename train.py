@@ -15,6 +15,8 @@ import json
 import numpy as np
 import torch
 import torch.nn.functional as F
+from torch.utils.tensorboard import SummaryWriter
+
 import nvdiffrast.torch as dr
 
 import src.renderutils as ru
@@ -65,13 +67,14 @@ def createLoss(FLAGS):
 
 def optimize_mesh(
     FLAGS,
-    out_dir, 
+    out_dir,
     log_interval=10,
     mesh_scale=2.0
     ):
 
     os.makedirs(out_dir, exist_ok=True)
     os.makedirs(os.path.join(out_dir, "mesh"), exist_ok=True)
+    tensorboard_writer = SummaryWriter(out_dir)
 
     # Projection matrix
     proj_mtx = util.projection(x=0.4, f=1000.0)
@@ -105,7 +108,7 @@ def optimize_mesh(
     # ==============================================================================================
     #  Initialize weights / variables for trainable mesh
     # ==============================================================================================
-    trainable_list = [] 
+    trainable_list = []
 
     v_pos_opt = normalized_base_mesh.v_pos.clone().detach().requires_grad_(True)
 
@@ -140,7 +143,7 @@ def optimize_mesh(
 
     # Add trainable arguments according to config
     if not 'position' in FLAGS.skip_train:
-        trainable_list += [v_pos_opt]        
+        trainable_list += [v_pos_opt]
     if not 'normal' in FLAGS.skip_train:
         trainable_list += normal_map_opt.getMips()
     if not 'kd' in FLAGS.skip_train:
@@ -166,7 +169,7 @@ def optimize_mesh(
     # ==============================================================================================
 
     render_ref_mesh = mesh.compute_tangents(ref_mesh)
-    
+
     # Compute AABB of reference mesh. Used for centering during rendering TODO: Use pre frame AABB?
     ref_mesh_aabb = mesh.aabb(render_ref_mesh.eval())
 
@@ -174,7 +177,7 @@ def optimize_mesh(
     #  Setup base mesh operation graph, precomputes topology etc.
     # ==============================================================================================
 
-    # Create optimized mesh with trainable positions 
+    # Create optimized mesh with trainable positions
     opt_base_mesh = Mesh(v_pos_opt, normalized_base_mesh.t_pos_idx, material=opt_material, base=normalized_base_mesh)
 
     # Scale from [-1, 1] local coordinate space to match extents of the reference mesh
@@ -208,7 +211,7 @@ def optimize_mesh(
 
     optimizer  = torch.optim.Adam(trainable_list, lr=FLAGS.learning_rate)
 
-    scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=lambda x: max(0.0, 10**(-x*0.0002))) 
+    scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=lambda x: max(0.0, 10**(-x*0.0002)))
 
     # ==============================================================================================
     #  Image loss
@@ -226,6 +229,7 @@ def optimize_mesh(
     # ==============================================================================================
     #  Training loop
     # ==============================================================================================
+    constant_lightpos = None
     img_cnt = 0
     ang = 0.0
     img_loss_vec = []
@@ -249,7 +253,7 @@ def optimize_mesh(
             a_lightpos = np.linalg.inv(a_mv)[None, :3, 3]
             a_campos = np.linalg.inv(a_mv)[None, :3, 3]
 
-            params = {'mvp' : a_mvp, 'lightpos' : a_lightpos, 'campos' : a_campos, 'resolution' : [FLAGS.display_res, FLAGS.display_res], 
+            params = {'mvp' : a_mvp, 'lightpos' : a_lightpos, 'campos' : a_campos, 'resolution' : [FLAGS.display_res, FLAGS.display_res],
             'time' : 0}
 
             # Render images, don't need to track any gradients
@@ -261,14 +265,17 @@ def optimize_mesh(
                 # Render
                 if FLAGS.subdivision > 0:
                     _opt_base   = mesh.center_by_reference(opt_base_mesh.eval(params), ref_mesh_aabb, mesh_scale)
-                    img_base = render.render_mesh(glctx, _opt_base, a_mvp, a_campos, a_lightpos, FLAGS.light_power, FLAGS.display_res, 
+                    img_base = render.render_mesh(glctx, _opt_base, a_mvp, a_campos, a_lightpos, FLAGS.light_power, FLAGS.display_res,
                         num_layers=FLAGS.layers, background=background, min_roughness=FLAGS.min_roughness)
                     img_base = util.scale_img_nhwc(img_base, [FLAGS.display_res, FLAGS.display_res])
 
-                img_opt = render.render_mesh(glctx, _opt_detail, a_mvp, a_campos, a_lightpos, FLAGS.light_power, FLAGS.display_res, 
-                    num_layers=FLAGS.layers, background=background, min_roughness=FLAGS.min_roughness)
-                img_ref = render.render_mesh(glctx, _opt_ref, a_mvp, a_campos, a_lightpos, FLAGS.light_power, FLAGS.display_res, 
+                img_opt = render.render_mesh(glctx, _opt_detail, a_mvp, a_campos, a_lightpos, FLAGS.light_power, FLAGS.display_res,
+                    num_layers=FLAGS.layers, background=background, min_roughness=FLAGS.min_roughness, ambient_only=FLAGS.ambient_only)
+                img_ref = render.render_mesh(glctx, _opt_ref, a_mvp, a_campos, a_lightpos, FLAGS.light_power, FLAGS.display_res,
                     num_layers=1, spp=FLAGS.spp, background=background, min_roughness=FLAGS.min_roughness)
+
+                val_img_loss = image_loss_fn(img_opt, img_ref).item()
+                tensorboard_writer.add_scalar(f"{FLAGS.loss}, validation", val_img_loss, it)
 
                 # Rescale
                 img_opt  = util.scale_img_nhwc(img_opt,  [FLAGS.display_res, FLAGS.display_res])
@@ -317,7 +324,15 @@ def optimize_mesh(
             r_mv       = np.matmul(util.translate(0, 0, -RADIUS), r_rot)
             mvp[b]     = np.matmul(proj_mtx, r_mv).astype(np.float32)
             campos[b]  = np.linalg.inv(r_mv)[:3, 3]
-            lightpos[b] = util.cosine_sample(campos[b])*RADIUS
+            if constant_lightpos is None:
+                constant_lightpos = util.cosine_sample(campos[b])*RADIUS
+                print(constant_lightpos.shape)
+                print(constant_lightpos)
+
+            if FLAGS.constant_training_light:
+                lightpos[b] = constant_lightpos
+            else:
+                lightpos[b] = util.cosine_sample(campos[b])*RADIUS
 
 
         params = {'mvp' : mvp, 'lightpos' : lightpos, 'campos' : campos, 'resolution' : [iter_res, iter_res], 'time' : 0}
@@ -335,15 +350,23 @@ def optimize_mesh(
         #  Render reference mesh
         # ==============================================================================================
         with torch.no_grad():
-            color_ref = render.render_mesh(glctx, _opt_ref, mvp, campos, lightpos, FLAGS.light_power, iter_res, 
-                spp=iter_spp, num_layers=1, background=randomBgColor, min_roughness=FLAGS.min_roughness)
+            color_ref = render.render_mesh(glctx, _opt_ref, mvp, campos, lightpos, FLAGS.light_power, iter_res,
+                spp=iter_spp, num_layers=1, background=randomBgColor, min_roughness=FLAGS.min_roughness,
+                ambient_only=FLAGS.reference_ambient_only)
 
         # ==============================================================================================
         #  Render the trainable mesh
         # ==============================================================================================
-        color_opt = render.render_mesh(glctx, _opt_detail, mvp, campos, lightpos, FLAGS.light_power, iter_res, 
-            spp=iter_spp, num_layers=FLAGS.layers, msaa=True , background=randomBgColor, 
-            min_roughness=FLAGS.min_roughness)
+        color_opt = render.render_mesh(glctx, _opt_detail, mvp, campos, lightpos, FLAGS.light_power, iter_res,
+            spp=iter_spp, num_layers=FLAGS.layers, msaa=True , background=randomBgColor,
+            min_roughness=FLAGS.min_roughness, ambient_only=FLAGS.ambient_only)
+
+        # Debugging output
+        if log_interval and (it % 40 == 0):
+            image_for_tensorboard = torch.cat((color_opt[:2].cpu(), color_ref[:2].cpu()), dim=2)
+            image_for_tensorboard = image_for_tensorboard.view(-1, *image_for_tensorboard.shape[2:])
+            image_for_tensorboard = image_for_tensorboard.clamp(0, 1)
+            tensorboard_writer.add_image("Render + GT (online)", image_for_tensorboard, it, dataformats='HWC')
 
         # ==============================================================================================
         #  Compute loss
@@ -362,6 +385,8 @@ def optimize_mesh(
         # Log losses
         img_loss_vec.append(img_loss.item())
         lap_loss_vec.append(lap_loss.item())
+        tensorboard_writer.add_scalar(f"{FLAGS.loss}, training (online)", img_loss_vec[-1], it)
+        tensorboard_writer.add_scalar(f"Laplacian loss, training (online)", lap_loss_vec[-1], it)
 
         # Schedule for laplacian loss weight
         if it == 0:
@@ -405,13 +430,13 @@ def optimize_mesh(
             img_loss_avg = np.mean(np.asarray(img_loss_vec[-log_interval:]))
             lap_loss_avg = np.mean(np.asarray(lap_loss_vec[-log_interval:]))
             iter_dur_avg = np.mean(np.asarray(iter_dur_vec[-log_interval:]))
-            
+
             remaining_time = (FLAGS.iter-it)*iter_dur_avg
-            print("iter=%5d, img_loss=%.6f, lap_loss=%.6f, lr=%.5f, time=%.1f ms, rem=%s" % 
+            print("iter=%5d, img_loss=%.6f, lap_loss=%.6f, lr=%.5f, time=%.1f ms, rem=%s" %
                 (it, img_loss_avg, lap_loss_avg*lap_fac, optimizer.param_groups[0]['lr'], iter_dur_avg*1000, util.time_to_text(remaining_time)))
 
     # Save final mesh to file
-    obj.write_obj(os.path.join(out_dir, "mesh/"), opt_base_mesh.eval())
+    obj.write_obj(os.path.join(out_dir, "mesh/"), opt_detail_mesh.eval())
 
 #----------------------------------------------------------------------------
 # Main function.
@@ -443,7 +468,10 @@ def main():
     parser.add_argument('--config', type=str, default=None, help='Config file')
     parser.add_argument('-rm', '--ref_mesh', type=str)
     parser.add_argument('-bm', '--base-mesh', type=str)
-    
+    parser.add_argument('--constant_training_light', action='store_true', default=False)
+    parser.add_argument('--ambient_only', action='store_true', default=False)
+    parser.add_argument('--reference_ambient_only', action='store_true', default=False)
+
     FLAGS = parser.parse_args()
 
     FLAGS.camera_eye = [0.0, 0.0, RADIUS]
