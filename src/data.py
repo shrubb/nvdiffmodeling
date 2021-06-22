@@ -1,6 +1,7 @@
 from . import util
 
 import torch
+import numpy as np
 
 from pathlib import Path
 
@@ -9,8 +10,8 @@ RADIUS = 3.5
 class MultiViewDataset(torch.utils.data.IterableDataset):
     """
     A dataset for views of a 3D object.
-    One sample represents one view, and is a tuple
-    `(<camera matrix Rt>, <image [or None, i.e. optional]>)`.
+    One sample represents one view, and is a tuple of length 1 or 2:
+    `(<camera matrix Rt>, <image [optional]>)`.
     """
     def __init__(self, path=None):
         """
@@ -44,6 +45,10 @@ class MultiViewDataset(torch.utils.data.IterableDataset):
             while True:
                 r_rot = util.random_rotation_translation(0.25)
                 r_mv = util.translate(0, 0, -RADIUS) @ r_rot
-                yield r_mv, None
+                yield r_mv.astype(np.float32),
         else:
             raise NotImplementedError()
+
+def get_dataloader(batch_size, path):
+    return torch.utils.data.DataLoader(
+        MultiViewDataset(path), batch_size=batch_size, num_workers=1)

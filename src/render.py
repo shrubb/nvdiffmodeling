@@ -184,13 +184,13 @@ def render_mesh(
     ):
 
     def prepare_input_vector(x):
-        x = torch.tensor(x, dtype=torch.float32, device='cuda') if not torch.is_tensor(x) else x
+        x = torch.tensor(x, dtype=torch.float32, device='cuda')
         return x[:, None, None, :] if len(x.shape) == 2 else x
 
     full_res = resolution*spp
 
     # Convert numpy arrays to torch tensors
-    mtx_in      = torch.tensor(mtx_in, dtype=torch.float32, device='cuda') if not torch.is_tensor(mtx_in) else mtx_in
+    mtx_in      = torch.tensor(mtx_in, dtype=torch.float32, device='cuda')
     light_pos   = prepare_input_vector(light_pos)
     light_power = prepare_input_vector(light_power)
     view_pos    = prepare_input_vector(view_pos)

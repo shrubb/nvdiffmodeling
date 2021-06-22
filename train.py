@@ -232,7 +232,7 @@ def optimize_mesh(
     # ==============================================================================================
     #  Custom dataset (camera parameters, possibly random, possibly with images)
     # ==============================================================================================
-    dataloader = iter(data.MultiViewDataset(FLAGS.custom_dataset))
+    dataloader = iter(data.get_dataloader(FLAGS.batch, FLAGS.custom_dataset))
 
     # ==============================================================================================
     #  Training loop
@@ -318,25 +318,27 @@ def optimize_mesh(
             iter_res = np.random.randint(16, FLAGS.train_res+1)
             iter_spp = FLAGS.spp * (FLAGS.train_res // iter_res)
 
-        mvp = np.zeros((FLAGS.batch, 4,4),  dtype=np.float32)
-        campos   = np.zeros((FLAGS.batch, 3), dtype=np.float32)
-        lightpos = np.zeros((FLAGS.batch, 3), dtype=np.float32)
-
         # ==============================================================================================
         #  Build transform stack for minibatching
         # ==============================================================================================
-        for b in range(FLAGS.batch):
-            # Random rotation/translation matrix for optimization.
-            r_mv, _ = next(dataloader)
+        batch = next(dataloader)
 
-            mvp[b]     = np.matmul(proj_mtx, r_mv).astype(np.float32)
-            campos[b]  = np.linalg.inv(r_mv)[:3, 3]
+        # Check if dataloader has returned images or just camera matrices
+        try:
+            r_mv, color_ref = batch
+        except ValueError:
+            r_mv, = batch
+            color_ref = None
 
-            if FLAGS.constant_training_light is not None:
-                lightpos[b] = FLAGS.constant_training_light
-            else:
-                lightpos[b] = util.cosine_sample(campos[b])*RADIUS
+        mvp = torch.as_tensor(proj_mtx)[None] @ r_mv
+        campos = r_mv.inverse()[:, :3, 3]
 
+        if FLAGS.constant_training_light is not None:
+            lightpos = torch.as_tensor(FLAGS.constant_training_light).expand(FLAGS.batch, 3)
+        else:
+            lightpos = torch.zeros((FLAGS.batch, 3),   dtype=torch.float32)
+            for lightpos_sample, campos_sample in zip(lightpos, campos):
+                lightpos_sample[:] = torch.as_tensor(util.cosine_sample(campos_sample) * RADIUS)
 
         params = {'mvp' : mvp, 'lightpos' : lightpos, 'campos' : campos, 'resolution' : [iter_res, iter_res], 'time' : 0}
 
