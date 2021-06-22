@@ -14,5 +14,5 @@
     "out_dir" : "spot-both-ambient",
     "constant_training_light": true,
     "ambient_only" : true,
-    "reference_ambient_only" : true
+    "ambient_only_reference" : true
 }

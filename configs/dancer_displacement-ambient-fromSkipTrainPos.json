@@ -1,18 +1,20 @@
 {
-    "base_mesh": "data/dancer/dancer_1k.obj",
+    "base_mesh": "out/dancer_displacement-ambient-skipTrainPos/mesh/mesh.obj",
     "ref_mesh": "data/dancer/dancer.obj",
     "mtl_override": "data/dancer/dancer_diffuse.mtl",
-    "out_dir": "dancer_displacement",
+    "out_dir": "dancer_displacement-ambient-fromSkipTrainPos",
     "camera_eye": [ 0.0, 0.0, 3.0 ],
     "camera_up": [ 0.0, 1.0, 0.0 ],
-    "random_textures": false,
     "save_interval" :  100,
     "log_interval" :  120,
     "train_res": 512,
     "texture_res": [ 2048, 2048 ],
-    "subdivision": 2,
+    "subdivision": 0,
     "batch": 8,
     "displacement": 0.20,
     "laplacian_factor": 1000,
-    "learning_rate": 0.003
+    "learning_rate": 0.003,
+    "constant_training_light": [0.82547714, -2.4586678, 2.35022099],
+    "ambient_only" : true,
+    "textures_init": "base"
 }

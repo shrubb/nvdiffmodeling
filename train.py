@@ -79,10 +79,6 @@ def optimize_mesh(
     # Projection matrix
     proj_mtx = util.projection(x=0.4, f=1000.0)
 
-    # Guess learning rate if not specified
-    if FLAGS.learning_rate is None:
-        FLAGS.learning_rate = 0.01
-
     # Reference mesh
     ref_mesh = load_mesh(FLAGS.ref_mesh, FLAGS.mtl_override)
     print("Ref mesh has %d triangles and %d vertices." % (ref_mesh.t_pos_idx.shape[0], ref_mesh.v_pos.shape[0]))
@@ -112,17 +108,20 @@ def optimize_mesh(
 
     v_pos_opt = normalized_base_mesh.v_pos.clone().detach().requires_grad_(True)
 
-    # Trainable normal map, initialize to (0,0,1) & make sure normals are always in positive hemisphere
-    if FLAGS.random_textures:
-        normal_map_opt = texture.create_trainable(np.array([0, 0, 1]), FLAGS.texture_res, not FLAGS.custom_mip)
+    # Trainable normal map
+    if FLAGS.textures_init == 'random':
+        # initialize to (0,0,1) & make sure normals are always in positive hemisphere
+        normal_map_init = np.array([0, 0, 1])
+    elif FLAGS.textures_init == 'ref':
+        normal_map_init = ref_mesh.material['normal']
+    elif FLAGS.textures_init == 'base':
+        normal_map_init = base_mesh.material['normal']
     else:
-        if 'normal' not in ref_mesh.material:
-            normal_map_opt = texture.create_trainable(np.array([0, 0, 1]), FLAGS.texture_res, not FLAGS.custom_mip)
-        else:
-            normal_map_opt = texture.create_trainable(ref_mesh.material['normal'], FLAGS.texture_res, not FLAGS.custom_mip)
+        raise ValueError(f"Unknown textures_init mode '{FLAGS.textures_init}'")
+    normal_map_opt = texture.create_trainable(normal_map_init, FLAGS.texture_res, not FLAGS.custom_mip)
 
     # Setup Kd, Ks albedo and specular textures
-    if FLAGS.random_textures:
+    if FLAGS.textures_init == 'random':
         if FLAGS.layers > 1:
             kd_map_opt = texture.create_trainable(np.random.uniform(size=FLAGS.texture_res + [4], low=0.0, high=1.0), FLAGS.texture_res, not FLAGS.custom_mip)
         else:
@@ -132,9 +131,14 @@ def optimize_mesh(
         ksG = np.random.uniform(size=FLAGS.texture_res + [1], low=FLAGS.min_roughness, high=1.0)
         ksB = np.random.uniform(size=FLAGS.texture_res + [1], low=0.0, high=1.0)
         ks_map_opt = texture.create_trainable(np.concatenate((ksR, ksG, ksB), axis=2), FLAGS.texture_res, not FLAGS.custom_mip)
-    else:
+    elif FLAGS.textures_init == 'ref':
         kd_map_opt = texture.create_trainable(ref_mesh.material['kd'], FLAGS.texture_res, not FLAGS.custom_mip)
         ks_map_opt = texture.create_trainable(ref_mesh.material['ks'], FLAGS.texture_res, not FLAGS.custom_mip)
+    elif FLAGS.textures_init == 'base':
+        kd_map_opt = texture.create_trainable(base_mesh.material['kd'], FLAGS.texture_res, not FLAGS.custom_mip)
+        ks_map_opt = texture.create_trainable(base_mesh.material['ks'], FLAGS.texture_res, not FLAGS.custom_mip)
+    else:
+        raise ValueError(f"Unknown textures_init mode '{FLAGS.textures_init}'")
 
     # Trainable displacement map
     displacement_map_var = None
@@ -182,8 +186,8 @@ def optimize_mesh(
 
     # Scale from [-1, 1] local coordinate space to match extents of the reference mesh
     opt_base_mesh = mesh.align_with_reference(opt_base_mesh, ref_mesh)
-
     # Compute smooth vertex normals
+
     opt_base_mesh = mesh.auto_normals(opt_base_mesh)
 
     # Set up tangent space
@@ -229,7 +233,6 @@ def optimize_mesh(
     # ==============================================================================================
     #  Training loop
     # ==============================================================================================
-    constant_lightpos = None
     img_cnt = 0
     ang = 0.0
     img_loss_vec = []
@@ -322,15 +325,12 @@ def optimize_mesh(
             # Random rotation/translation matrix for optimization.
             r_rot      = util.random_rotation_translation(0.25)
             r_mv       = np.matmul(util.translate(0, 0, -RADIUS), r_rot)
+
             mvp[b]     = np.matmul(proj_mtx, r_mv).astype(np.float32)
             campos[b]  = np.linalg.inv(r_mv)[:3, 3]
-            if constant_lightpos is None:
-                constant_lightpos = util.cosine_sample(campos[b])*RADIUS
-                print(constant_lightpos.shape)
-                print(constant_lightpos)
 
-            if FLAGS.constant_training_light:
-                lightpos[b] = constant_lightpos
+            if FLAGS.constant_training_light is not None:
+                lightpos[b] = FLAGS.constant_training_light
             else:
                 lightpos[b] = util.cosine_sample(campos[b])*RADIUS
 
@@ -352,7 +352,7 @@ def optimize_mesh(
         with torch.no_grad():
             color_ref = render.render_mesh(glctx, _opt_ref, mvp, campos, lightpos, FLAGS.light_power, iter_res,
                 spp=iter_spp, num_layers=1, background=randomBgColor, min_roughness=FLAGS.min_roughness,
-                ambient_only=FLAGS.reference_ambient_only)
+                ambient_only=FLAGS.ambient_only_reference)
 
         # ==============================================================================================
         #  Render the trainable mesh
@@ -362,10 +362,13 @@ def optimize_mesh(
             min_roughness=FLAGS.min_roughness, ambient_only=FLAGS.ambient_only)
 
         # Debugging output
-        if log_interval and (it % 40 == 0):
-            image_for_tensorboard = torch.cat((color_opt[:2].cpu(), color_ref[:2].cpu()), dim=2)
-            image_for_tensorboard = image_for_tensorboard.view(-1, *image_for_tensorboard.shape[2:])
-            image_for_tensorboard = image_for_tensorboard.clamp(0, 1)
+        if log_interval and it % log_interval == 0:
+            with torch.no_grad():
+                image_for_tensorboard = torch.cat((color_opt[:2], color_ref[:2]), dim=2)
+                image_for_tensorboard = image_for_tensorboard.view(-1, *image_for_tensorboard.shape[2:])
+                image_for_tensorboard.clamp_(0, 1)
+                image_for_tensorboard = image_for_tensorboard.cpu()
+
             tensorboard_writer.add_image("Render + GT (online)", image_for_tensorboard, it, dataformats='HWC')
 
         # ==============================================================================================
@@ -435,58 +438,74 @@ def optimize_mesh(
             print("iter=%5d, img_loss=%.6f, lap_loss=%.6f, lr=%.5f, time=%.1f ms, rem=%s" %
                 (it, img_loss_avg, lap_loss_avg*lap_fac, optimizer.param_groups[0]['lr'], iter_dur_avg*1000, util.time_to_text(remaining_time)))
 
-    # Save final mesh to file
-    obj.write_obj(os.path.join(out_dir, "mesh/"), opt_detail_mesh.eval())
+        if log_interval and it % (log_interval * 10) == 0:
+            # Save final mesh to file
+            obj.write_obj(os.path.join(out_dir, "mesh/"), opt_detail_mesh.eval())
 
 #----------------------------------------------------------------------------
 # Main function.
 #----------------------------------------------------------------------------
 
 def main():
+    import random
+    random.seed(777)
+    torch.manual_seed(777)
+    torch.cuda.manual_seed_all(777)
+    np.random.seed(777)
+
     parser = argparse.ArgumentParser(description='diffmodeling')
     parser.add_argument('-i', '--iter', type=int, default=5000)
     parser.add_argument('-b', '--batch', type=int, default=1)
     parser.add_argument('-s', '--spp', type=int, default=1)
     parser.add_argument('-l', '--layers', type=int, default=1)
-    parser.add_argument('-r', '--train-res', type=int, default=512)
-    parser.add_argument('-rtr', '--random-train-res', action='store_true', default=False)
-    parser.add_argument('-dr', '--display-res', type=int, default=None)
-    parser.add_argument('-tr', '--texture-res', nargs=2, type=int, default=[1024, 1024])
-    parser.add_argument('-di', '--display-interval', type=int, default=0)
-    parser.add_argument('-si', '--save-interval', type=int, default=1000)
-    parser.add_argument('-lr', '--learning-rate', type=float, default=None)
-    parser.add_argument('-lp', '--light-power', type=float, default=5.0)
-    parser.add_argument('-mr', '--min-roughness', type=float, default=0.08)
+    parser.add_argument('-r', '--train_res', type=int, default=512)
+    parser.add_argument('-rtr', '--random_train_res', action='store_true', default=False)
+    parser.add_argument('-dr', '--display_res', type=int, default=None)
+    parser.add_argument('-tr', '--texture_res', nargs=2, type=int, default=[1024, 1024])
+    parser.add_argument('-di', '--display_interval', type=int, default=0)
+    parser.add_argument('-si', '--save_interval', type=int, default=1000)
+    parser.add_argument('--log_interval', type=int, default=40)
+    parser.add_argument('-lr', '--learning_rate', type=float, default=0.01)
+    parser.add_argument('-lp', '--light_power', type=float, default=5.0)
+    parser.add_argument('-mr', '--min_roughness', type=float, default=0.08)
     parser.add_argument('-sd', '--subdivision', type=int, default=0)
-    parser.add_argument('-mip', '--custom-mip', action='store_true', default=False)
-    parser.add_argument('-rt', '--random-textures', action='store_true', default=False)
-    parser.add_argument('-lf', '--laplacian-factor', type=float, default=None)
-    parser.add_argument('-rl', '--relative-laplacian', type=bool, default=False)
+    parser.add_argument('-mip', '--custom_mip', action='store_true', default=False)
+    parser.add_argument('-rt', '--textures_init', type=str,
+        choices=['random', 'ref', 'base'], default='ref',
+        help="How to initialize ks/kd/normals: randomly, from reference mesh, or from base mesh")
+    parser.add_argument('-lf', '--laplacian_factor', type=float, default=None)
+    parser.add_argument('-rl', '--relative_laplacian', type=bool, default=False)
     parser.add_argument('-bg', '--background', default='checker', choices=['black', 'white', 'checker'])
     parser.add_argument('--loss', default='logl1', choices=['logl1', 'logl2', 'mse', 'smape', 'relativel2'])
     parser.add_argument('-o', '--out-dir', type=str, default=None)
     parser.add_argument('--config', type=str, default=None, help='Config file')
     parser.add_argument('-rm', '--ref_mesh', type=str)
-    parser.add_argument('-bm', '--base-mesh', type=str)
-    parser.add_argument('--constant_training_light', action='store_true', default=False)
+    parser.add_argument('-bm', '--base_mesh', type=str)
+    parser.add_argument('--constant_training_light', type=list, default=None,
+        help="During training, place light source at this fixed position instead of always "
+        "sampling that position randomly (example: [0.82547714, -2.4586678, 2.35022099])")
     parser.add_argument('--ambient_only', action='store_true', default=False)
-    parser.add_argument('--reference_ambient_only', action='store_true', default=False)
+    parser.add_argument('--ambient_only_reference', action='store_true', default=False)
+    parser.add_argument('--camera_eye', type=list, default=[0.0, 0.0, RADIUS])
+    parser.add_argument('--camera_up', type=list, default=[0.0, 1.0, 0.0])
+    parser.add_argument('--skip_train', type=list, default=[],
+        help="Any of: 'position', 'normal', 'kd', 'ks', 'displacement'")
+    parser.add_argument('--displacement', type=float, default=0.15)
+    parser.add_argument('--mtl_override', type=str, default=None,
+        help="Path to custom .mtl for reference mesh")
 
     FLAGS = parser.parse_args()
-
-    FLAGS.camera_eye = [0.0, 0.0, RADIUS]
-    FLAGS.camera_up  = [0.0, 1.0, 0.0]
-    FLAGS.skip_train = []
-    FLAGS.displacement = 0.15
-    FLAGS.mtl_override = None
 
     if FLAGS.config is not None:
         with open(FLAGS.config) as f:
             data = json.load(f)
             for key in data:
                 print(key, data[key])
+                if key not in FLAGS:
+                    raise KeyError(f"Unknown keyword '{key}' in config file")
                 FLAGS.__dict__[key] = data[key]
 
+    # Dynamic defaults
     if FLAGS.display_res is None:
         FLAGS.display_res = FLAGS.train_res
     if FLAGS.out_dir is None:
@@ -494,7 +513,7 @@ def main():
     else:
         out_dir = 'out/' + FLAGS.out_dir
 
-    optimize_mesh(FLAGS, out_dir)
+    optimize_mesh(FLAGS, out_dir, log_interval=FLAGS.log_interval)
 
 #----------------------------------------------------------------------------
 
