@@ -26,9 +26,8 @@ from src import mesh
 from src import texture
 from src import render
 from src import regularizer
+from src import data
 from src.mesh import Mesh
-
-RADIUS = 3.5
 
 # Enable to debug back-prop anomalies
 # torch.autograd.set_detect_anomaly(True)
@@ -231,6 +230,11 @@ def optimize_mesh(
         background = None
 
     # ==============================================================================================
+    #  Custom dataset (camera parameters, possibly random, possibly with images)
+    # ==============================================================================================
+    dataloader = iter(data.MultiViewDataset(FLAGS.custom_dataset))
+
+    # ==============================================================================================
     #  Training loop
     # ==============================================================================================
     img_cnt = 0
@@ -323,8 +327,7 @@ def optimize_mesh(
         # ==============================================================================================
         for b in range(FLAGS.batch):
             # Random rotation/translation matrix for optimization.
-            r_rot      = util.random_rotation_translation(0.25)
-            r_mv       = np.matmul(util.translate(0, 0, -RADIUS), r_rot)
+            r_mv, _ = next(dataloader)
 
             mvp[b]     = np.matmul(proj_mtx, r_mv).astype(np.float32)
             campos[b]  = np.linalg.inv(r_mv)[:3, 3]
@@ -481,12 +484,16 @@ def main():
     parser.add_argument('--config', type=str, default=None, help='Config file')
     parser.add_argument('-rm', '--ref_mesh', type=str)
     parser.add_argument('-bm', '--base_mesh', type=str)
+    parser.add_argument('--custom_dataset', type=str, default=None,
+        help="Where to look for custom camera parameters (path to a text file) and possibly "
+        "images (path to a directory with cameras.txt). "
+        "File format is explained in src/data.py:MultiViewDataset.")
     parser.add_argument('--constant_training_light', type=list, default=None,
         help="During training, place light source at this fixed position instead of always "
         "sampling that position randomly (example: [0.82547714, -2.4586678, 2.35022099])")
     parser.add_argument('--ambient_only', action='store_true', default=False)
     parser.add_argument('--ambient_only_reference', action='store_true', default=False)
-    parser.add_argument('--camera_eye', type=list, default=[0.0, 0.0, RADIUS])
+    parser.add_argument('--camera_eye', type=list, default=[0.0, 0.0, data.RADIUS])
     parser.add_argument('--camera_up', type=list, default=[0.0, 1.0, 0.0])
     parser.add_argument('--skip_train', type=list, default=[],
         help="Any of: 'position', 'normal', 'kd', 'ks', 'displacement'")
@@ -498,12 +505,12 @@ def main():
 
     if FLAGS.config is not None:
         with open(FLAGS.config) as f:
-            data = json.load(f)
-            for key in data:
-                print(key, data[key])
+            new_data = json.load(f)
+            for key in new_data:
+                print(key, new_data[key])
                 if key not in FLAGS:
                     raise KeyError(f"Unknown keyword '{key}' in config file")
-                FLAGS.__dict__[key] = data[key]
+                FLAGS.__dict__[key] = new_data[key]
 
     # Dynamic defaults
     if FLAGS.display_res is None:
