@@ -11,6 +11,7 @@ import sys
 import time
 import argparse
 import json
+from pathlib import Path
 
 import numpy as np
 import torch
@@ -76,7 +77,7 @@ def optimize_mesh(
     tensorboard_writer = SummaryWriter(out_dir)
 
     # Projection matrix
-    proj_mtx = util.projection(x=0.4, f=1000.0)
+    proj_mtx = util.projection(x=0.4, f=1000.0).astype(np.float32)
 
     # Reference mesh
     ref_mesh = load_mesh(FLAGS.ref_mesh, FLAGS.mtl_override)
@@ -232,7 +233,7 @@ def optimize_mesh(
     # ==============================================================================================
     #  Custom dataset (camera parameters, possibly random, possibly with images)
     # ==============================================================================================
-    dataloader = iter(data.get_dataloader(FLAGS.batch, FLAGS.custom_dataset))
+    dataloader = iter(data.get_dataloader(FLAGS.batch, FLAGS.custom_dataset, FLAGS.train_res))
 
     # ==============================================================================================
     #  Training loop
@@ -326,6 +327,10 @@ def optimize_mesh(
         # Check if dataloader has returned images or just camera matrices
         try:
             r_mv, color_ref = batch
+
+            if FLAGS.random_train_res:
+                raise NotImplementedError(
+                    "Datasets with custom images not supported with --random_train_res")
         except ValueError:
             r_mv, = batch
             color_ref = None
@@ -338,7 +343,8 @@ def optimize_mesh(
         else:
             lightpos = torch.zeros((FLAGS.batch, 3),   dtype=torch.float32)
             for lightpos_sample, campos_sample in zip(lightpos, campos):
-                lightpos_sample[:] = torch.as_tensor(util.cosine_sample(campos_sample) * RADIUS)
+                lightpos_sample[:] = torch.as_tensor(
+                    util.cosine_sample(campos_sample.numpy()) * data.RADIUS)
 
         params = {'mvp' : mvp, 'lightpos' : lightpos, 'campos' : campos, 'resolution' : [iter_res, iter_res], 'time' : 0}
 
@@ -352,7 +358,7 @@ def optimize_mesh(
         _opt_detail = mesh.center_by_reference(opt_detail_mesh.eval(params), ref_mesh_aabb, mesh_scale)
 
         # ==============================================================================================
-        #  Render reference mesh
+        #  Render reference mesh (if not available from dataloader)
         # ==============================================================================================
         with torch.no_grad():
             color_ref = render.render_mesh(glctx, _opt_ref, mvp, campos, lightpos, FLAGS.light_power, iter_res,
@@ -443,7 +449,7 @@ def optimize_mesh(
             print("iter=%5d, img_loss=%.6f, lap_loss=%.6f, lr=%.5f, time=%.1f ms, rem=%s" %
                 (it, img_loss_avg, lap_loss_avg*lap_fac, optimizer.param_groups[0]['lr'], iter_dur_avg*1000, util.time_to_text(remaining_time)))
 
-        if log_interval and it % (log_interval * 10) == 0:
+        if log_interval and it % (log_interval * 10) == 0 or it == FLAGS.iter:
             # Save final mesh to file
             obj.write_obj(os.path.join(out_dir, "mesh/"), opt_detail_mesh.eval())
 
@@ -517,10 +523,13 @@ def main():
     # Dynamic defaults
     if FLAGS.display_res is None:
         FLAGS.display_res = FLAGS.train_res
+
     if FLAGS.out_dir is None:
-        out_dir = 'out/cube_%d' % (FLAGS.train_res)
-    else:
-        out_dir = 'out/' + FLAGS.out_dir
+        if FLAGS.config is None:
+            FLAGS.out_dir = 'debug'
+        else:
+            FLAGS.out_dir = Path(FLAGS.config).with_suffix('').name
+    out_dir = 'out/' + FLAGS.out_dir
 
     optimize_mesh(FLAGS, out_dir, log_interval=FLAGS.log_interval)
 
