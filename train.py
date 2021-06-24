@@ -235,6 +235,10 @@ def optimize_mesh(
     # ==============================================================================================
     dataloader = iter(data.get_dataloader(FLAGS.batch, FLAGS.custom_dataset, FLAGS.train_res))
 
+    SAVE_CAMERAS_AND_IMAGES = False
+    if SAVE_CAMERAS_AND_IMAGES:
+        cameras = []
+
     # ==============================================================================================
     #  Training loop
     # ==============================================================================================
@@ -244,7 +248,7 @@ def optimize_mesh(
     lap_loss_vec = []
     iter_dur_vec = []
     glctx = dr.RasterizeGLContext()
-    for it in range(FLAGS.iter+1):
+    for it in range(FLAGS.iter):
         # ==============================================================================================
         #  Display / save outputs. Do it before training so we get initial meshes
         # ==============================================================================================
@@ -327,6 +331,7 @@ def optimize_mesh(
         # Check if dataloader has returned images or just camera matrices
         try:
             r_mv, color_ref = batch
+            color_ref = color_ref.cuda()
 
             if FLAGS.random_train_res:
                 raise NotImplementedError(
@@ -360,10 +365,19 @@ def optimize_mesh(
         # ==============================================================================================
         #  Render reference mesh (if not available from dataloader)
         # ==============================================================================================
-        with torch.no_grad():
-            color_ref = render.render_mesh(glctx, _opt_ref, mvp, campos, lightpos, FLAGS.light_power, iter_res,
-                spp=iter_spp, num_layers=1, background=randomBgColor, min_roughness=FLAGS.min_roughness,
-                ambient_only=FLAGS.ambient_only_reference)
+        if color_ref is None:
+            with torch.no_grad():
+                color_ref = render.render_mesh(glctx, _opt_ref, mvp, campos, lightpos, FLAGS.light_power, iter_res,
+                    spp=iter_spp, num_layers=1, background=randomBgColor, min_roughness=FLAGS.min_roughness,
+                    ambient_only=FLAGS.ambient_only_reference)
+
+        if SAVE_CAMERAS_AND_IMAGES:
+            import cv2
+            img = (color_ref[0].cpu().numpy() * 255.0).round().astype(np.uint8)
+            cv2.cvtColor(img, cv2.COLOR_BGR2RGB, dst=img)
+            cv2.imwrite("data/spot-40FixedViews/%03d.png" % it, img)
+
+            cameras.append(r_mv)
 
         # ==============================================================================================
         #  Render the trainable mesh
@@ -453,6 +467,11 @@ def optimize_mesh(
             # Save final mesh to file
             obj.write_obj(os.path.join(out_dir, "mesh/"), opt_detail_mesh.eval())
 
+    if SAVE_CAMERAS_AND_IMAGES:
+        cameras = torch.cat(cameras).numpy()
+        from generate_camera_matrices import write_cameras_to_file
+        write_cameras_to_file(cameras, "data/spot-40FixedViews/cameras.txt", ["%03d.png" % i for i in range(len(cameras))])
+
 #----------------------------------------------------------------------------
 # Main function.
 #----------------------------------------------------------------------------
@@ -525,10 +544,7 @@ def main():
         FLAGS.display_res = FLAGS.train_res
 
     if FLAGS.out_dir is None:
-        if FLAGS.config is None:
-            FLAGS.out_dir = 'debug'
-        else:
-            FLAGS.out_dir = Path(FLAGS.config).with_suffix('').name
+        FLAGS.out_dir = 'debug'
     out_dir = 'out/' + FLAGS.out_dir
 
     optimize_mesh(FLAGS, out_dir, log_interval=FLAGS.log_interval)

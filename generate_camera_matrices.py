@@ -5,10 +5,13 @@ from src import util
 import argparse
 from pathlib import Path
 
-def write_cameras_to_file(cameras, path):
+def write_cameras_to_file(cameras, path, names=None):
+    if names is None:
+        names = [""] * len(cameras)
+
     with open(path, 'w') as f:
-        for camera in cameras:
-            f.write("\n")
+        for camera, name in zip(cameras, names):
+            f.write(name + "\n")
             for row in camera:
                 f.write(" ".join(map(str, row)) + "\n")
 
