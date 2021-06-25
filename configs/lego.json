@@ -1,20 +1,19 @@
 {
-    "out_dir": "spot-fixed-images-ambient-40",
+    "out_dir": "lego-defaultCamera",
     "base_mesh": "data/sphere.obj",
     "ref_mesh": "data/spot/spot.obj",
-    "custom_dataset": "data/spot-40FixedViews",
-    "camera_eye": [ 2.5, 0.0, -2.5 ],
-    "camera_up": [ 0.0, 1.0, 0.0 ],
+    "custom_dataset": "data/lego",
+    "camera_eye": [ 3.1680095195770264, -2.1722869873046875, 1.2226545810699463 ],
+    "camera_up": [ 0.0, 0.0, 1.0 ],
+    "iter": 5000,
     "save_interval" :  100,
     "log_interval" :  120,
-    "iter": 5000,
     "texture_res": [ 1024, 1024 ],
-    "train_res": 512,
+    "train_res": 800,
     "batch": 8,
     "learning_rate": 0.03,
-    "min_roughness" : 0.25,
     "textures_init": "random",
+    "subdivision": 3,
     "ambient_only": true,
     "ambient_only_reference": true
 }
-

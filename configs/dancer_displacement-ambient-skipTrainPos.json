@@ -2,7 +2,7 @@
     "base_mesh": "data/dancer/dancer_1k.obj",
     "ref_mesh": "data/dancer/dancer.obj",
     "mtl_override": "data/dancer/dancer_diffuse.mtl",
-    "out_dir": "dancer_displacement-ambient-skipTrainPos",
+    "out_dir": "dancer_displacement-ambient-skipTrainPos-2",
     "camera_eye": [ 0.0, 0.0, 3.0 ],
     "camera_up": [ 0.0, 1.0, 0.0 ],
     "save_interval" :  100,
