@@ -233,7 +233,9 @@ def optimize_mesh(
     # ==============================================================================================
     #  Custom dataset (camera parameters, possibly random, possibly with images)
     # ==============================================================================================
-    dataloader = iter(data.get_dataloader(FLAGS.batch, FLAGS.custom_dataset, FLAGS.train_res))
+    dataloader = data.get_dataloader(FLAGS.batch, FLAGS.custom_dataset, FLAGS.train_res)
+    dataloader_iterator = iter(dataloader)
+    dataset_has_images = dataloader.dataset.kind == data.DatasetKind.FIXED_CAMERAS_AND_IMAGES
 
     SAVE_CAMERAS_AND_IMAGES = False
     if SAVE_CAMERAS_AND_IMAGES:
@@ -293,15 +295,15 @@ def optimize_mesh(
                 img_opt  = util.scale_img_nhwc(img_opt,  [FLAGS.display_res, FLAGS.display_res])
                 img_ref  = util.scale_img_nhwc(img_ref,  [FLAGS.display_res, FLAGS.display_res])
 
+                result_image = [img_opt]
                 if FLAGS.subdivision > 0:
-                    img_disp = torch.clamp(torch.abs(displacement_map_var[None, ...]), min=0.0, max=1.0).repeat(1,1,1,3)
-                    img_disp = util.scale_img_nhwc(img_disp, [FLAGS.display_res, FLAGS.display_res])
-                    result_image = torch.cat([img_base, img_opt, img_ref], axis=2)
-                else:
-                    result_image = torch.cat([img_opt, img_ref], axis=2)
+                    result_image.insert(0, img_base)
+                if not dataset_has_images:
+                    result_image.append(img_ref)
+                result_image = torch.cat(result_image, axis=2)
 
             result_image[0] = util.tonemap_srgb(result_image[0])
-            np_result_image = result_image[0].detach().cpu().numpy()
+            np_result_image = result_image[0].cpu().numpy()
             if display_image:
                 util.display_image(np_result_image, size=FLAGS.display_res, title='%d / %d' % (it, FLAGS.iter))
             if save_image:
@@ -326,19 +328,20 @@ def optimize_mesh(
         # ==============================================================================================
         #  Build transform stack for minibatching
         # ==============================================================================================
-        batch = next(dataloader)
+        batch = next(dataloader_iterator)
 
-        # Check if dataloader has returned images or just camera matrices
-        try:
-            r_mv, color_ref = batch
+        if dataset_has_images:
+            r_mv, color_ref, foreground_masks = batch
             color_ref = color_ref.cuda()
+            foreground_masks = foreground_masks.cuda()
 
             if FLAGS.random_train_res:
                 raise NotImplementedError(
                     "Datasets with custom images not supported with --random_train_res")
-        except ValueError:
+        else:
             r_mv, = batch
             color_ref = None
+            foreground_masks = None
 
         mvp = torch.as_tensor(proj_mtx)[None] @ r_mv
         campos = r_mv.inverse()[:, :3, 3]
@@ -354,7 +357,9 @@ def optimize_mesh(
         params = {'mvp' : mvp, 'lightpos' : lightpos, 'campos' : campos, 'resolution' : [iter_res, iter_res], 'time' : 0}
 
         # Random bg color
-        randomBgColor = torch.rand(FLAGS.batch, iter_res, iter_res, 3, dtype=torch.float32, device='cuda')
+        randomBgMean = torch.rand(FLAGS.batch, 1, 1, 3, device='cuda')
+        randomBgNoise = torch.rand(FLAGS.batch, iter_res, iter_res, 3, device='cuda')
+        randomBackground = (randomBgMean + randomBgNoise * 0.1).clamp(0, 1)
 
         # ==============================================================================================
         #  Evaluate all mesh ops (may change when positions are modified etc) and center/align meshes
@@ -368,8 +373,10 @@ def optimize_mesh(
         if color_ref is None:
             with torch.no_grad():
                 color_ref = render.render_mesh(glctx, _opt_ref, mvp, campos, lightpos, FLAGS.light_power, iter_res,
-                    spp=iter_spp, num_layers=1, background=randomBgColor, min_roughness=FLAGS.min_roughness,
+                    spp=iter_spp, num_layers=1, background=randomBackground, min_roughness=FLAGS.min_roughness,
                     ambient_only=FLAGS.ambient_only_reference)
+        else:
+            color_ref = color_ref + (1.0 - foreground_masks) * randomBackground
 
         if SAVE_CAMERAS_AND_IMAGES:
             import cv2
@@ -383,7 +390,7 @@ def optimize_mesh(
         #  Render the trainable mesh
         # ==============================================================================================
         color_opt = render.render_mesh(glctx, _opt_detail, mvp, campos, lightpos, FLAGS.light_power, iter_res,
-            spp=iter_spp, num_layers=FLAGS.layers, msaa=True , background=randomBgColor,
+            spp=iter_spp, num_layers=FLAGS.layers, msaa=True , background=randomBackground,
             min_roughness=FLAGS.min_roughness, ambient_only=FLAGS.ambient_only)
 
         # Debugging output
@@ -404,11 +411,6 @@ def optimize_mesh(
 
         # Compute laplace loss
         lap_loss = lap_loss_fn.eval(params)
-
-        # Debug, store every training iteration
-        # result_image = torch.cat([color_opt, color_ref], axis=2)
-        # np_result_image = result_image[0].detach().cpu().numpy()
-        # util.save_image(out_dir + '/' + ('train_%06d.png' % it), np_result_image)
 
         # Log losses
         img_loss_vec.append(img_loss.item())
@@ -463,7 +465,7 @@ def optimize_mesh(
             print("iter=%5d, img_loss=%.6f, lap_loss=%.6f, lr=%.5f, time=%.1f ms, rem=%s" %
                 (it, img_loss_avg, lap_loss_avg*lap_fac, optimizer.param_groups[0]['lr'], iter_dur_avg*1000, util.time_to_text(remaining_time)))
 
-        if log_interval and it % (log_interval * 10) == 0 or it == FLAGS.iter:
+        if log_interval and it % (log_interval * 10) == 0 or it == FLAGS.iter - 1:
             # Save final mesh to file
             obj.write_obj(os.path.join(out_dir, "mesh/"), opt_detail_mesh.eval())
 
