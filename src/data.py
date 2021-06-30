@@ -18,8 +18,10 @@ class DatasetKind(enum.Enum):
 class MultiViewDataset(torch.utils.data.IterableDataset):
     """
     A dataset for views of a 3D object.
-    One sample represents one view, and is a tuple of length 1 or 2:
-    `(<camera matrix Rt>, <image [optional]>)`.
+    One sample represents one view, and is a tuple of length 1 or 3:
+    `(<camera matrix Rt>,)`
+    or
+    `(<camera matrix Rt>, <image>, <foreground mask>)`.
     """
     def __init__(self, path=None, resolution=512):
         """

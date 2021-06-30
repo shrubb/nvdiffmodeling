@@ -55,7 +55,7 @@ def load_obj(filename, clear_ks=True, mtl_override=None):
             'ks'   : texture.Texture2D(torch.tensor([0.0, 0.0, 0.0], dtype=torch.float32, device='cuda'))
         }
     ]
-    if mtl_override is None: 
+    if mtl_override is None:
         for line in lines:
             if len(line.split()) == 0:
                 continue
@@ -69,7 +69,7 @@ def load_obj(filename, clear_ks=True, mtl_override=None):
     for line in lines:
         if len(line.split()) == 0:
             continue
-        
+
         prefix = line.split()[0].lower()
         if prefix == 'v':
             vertices.append([float(v) for v in line.split()[1:]])
@@ -80,6 +80,24 @@ def load_obj(filename, clear_ks=True, mtl_override=None):
             normals.append([float(v) for v in line.split()[1:]])
 
     # load faces
+    def parse_face_node(s):
+        """
+        s:
+            `str`
+            "123" or "123/456" or "123/456/789"
+
+        return:
+        (v, t, n):
+            `tuple` of `int`
+            vertex, texture and normal 0-indices
+        """
+        indices = s.split('/')
+        assert len(indices) <= 3
+        retval = tuple(int(idx) - 1 for idx in indices)
+        retval += (-1,) * (3 - len(retval))
+
+        return retval
+
     activeMatIdx = None
     used_materials = []
     faces, tfaces, nfaces, mfaces = [], [], [], []
@@ -96,19 +114,10 @@ def load_obj(filename, clear_ks=True, mtl_override=None):
         elif prefix == 'f': # Parse face
             vs = line.split()[1:]
             nv = len(vs)
-            vv = vs[0].split('/')
-            v0 = int(vv[0]) - 1
-            t0 = int(vv[1]) - 1 if vv[1] != "" else -1
-            n0 = int(vv[2]) - 1 if vv[2] != "" else -1
+            v0, t0, n0 = parse_face_node(vs[0])
             for i in range(nv - 2): # Triangulate polygons
-                vv = vs[i + 1].split('/')
-                v1 = int(vv[0]) - 1
-                t1 = int(vv[1]) - 1 if vv[1] != "" else -1
-                n1 = int(vv[2]) - 1 if vv[2] != "" else -1
-                vv = vs[i + 2].split('/')
-                v2 = int(vv[0]) - 1
-                t2 = int(vv[1]) - 1 if vv[1] != "" else -1
-                n2 = int(vv[2]) - 1 if vv[2] != "" else -1
+                v1, t1, n1 = parse_face_node(vs[i + 1])
+                v2, t2, n2 = parse_face_node(vs[i + 2])
                 mfaces.append(activeMatIdx)
                 faces.append([v0, v1, v2])
                 tfaces.append([t0, t1, t2])
@@ -124,7 +133,7 @@ def load_obj(filename, clear_ks=True, mtl_override=None):
     vertices = torch.tensor(vertices, dtype=torch.float32, device='cuda')
     texcoords = torch.tensor(texcoords, dtype=torch.float32, device='cuda') if len(texcoords) > 0 else None
     normals = torch.tensor(normals, dtype=torch.float32, device='cuda') if len(normals) > 0 else None
-    
+
     faces = torch.tensor(faces, dtype=torch.int64, device='cuda')
     tfaces = torch.tensor(tfaces, dtype=torch.int64, device='cuda') if texcoords is not None else None
     nfaces = torch.tensor(nfaces, dtype=torch.int64, device='cuda') if normals is not None else None
@@ -160,7 +169,7 @@ def write_obj(folder, mesh):
         print("    writing %d vertices" % len(v_pos))
         for v in v_pos:
             f.write('v {} {} {} \n'.format(v[0], v[1], v[2]))
-       
+
         print("    writing %d texcoords" % len(v_tex))
         if v_tex is not None:
             assert(len(t_pos_idx) == len(t_tex_idx))
