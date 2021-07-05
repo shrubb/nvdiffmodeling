@@ -76,8 +76,19 @@ def optimize_mesh(
     os.makedirs(os.path.join(out_dir, "mesh"), exist_ok=True)
     tensorboard_writer = SummaryWriter(out_dir)
 
-    # Projection matrix
-    proj_mtx = util.projection(x=0.4, f=1000.0).astype(np.float32)
+    # ==============================================================================================
+    #  Custom dataset (camera parameters, possibly random, possibly with images)
+    # ==============================================================================================
+    dataloader = data.get_dataloader(FLAGS.batch, FLAGS.custom_dataset, FLAGS.train_res)
+    dataloader_iterator = iter(dataloader)
+    dataset_has_images = dataloader.dataset.kind == data.DatasetKind.FIXED_CAMERAS_AND_IMAGES
+
+    # Projection matrix; for now, only constant matrix is supported
+    proj_mtx = dataloader.dataset.get_projection_matrix()
+
+    SAVE_CAMERAS_AND_IMAGES = False
+    if SAVE_CAMERAS_AND_IMAGES:
+        cameras = []
 
     # Reference mesh
     ref_mesh = load_mesh(FLAGS.ref_mesh, FLAGS.mtl_override)
@@ -96,7 +107,10 @@ def optimize_mesh(
     print("Avg edge length: %f" % regularizer.avg_edge_length(base_mesh))
 
     # Create normalized size versions of the base and reference meshes. Normalized base_mesh is important as it makes it easier to configure learning rate.
-    normalized_base_mesh = mesh.unit_size(base_mesh)
+    if dataset_has_images:
+        normalized_base_mesh = base_mesh
+    else:
+        normalized_base_mesh = mesh.unit_size(base_mesh)
     normalized_ref_mesh = mesh.unit_size(ref_mesh)
 
     assert not FLAGS.random_train_res or FLAGS.custom_mip, "Random training resolution requires custom mip."
@@ -185,7 +199,8 @@ def optimize_mesh(
     opt_base_mesh = Mesh(v_pos_opt, normalized_base_mesh.t_pos_idx, material=opt_material, base=normalized_base_mesh)
 
     # Scale from [-1, 1] local coordinate space to match extents of the reference mesh
-    opt_base_mesh = mesh.align_with_reference(opt_base_mesh, ref_mesh)
+    if not dataset_has_images:
+        opt_base_mesh = mesh.align_with_reference(opt_base_mesh, ref_mesh)
     # Compute smooth vertex normals
 
     opt_base_mesh = mesh.auto_normals(opt_base_mesh)
@@ -231,17 +246,6 @@ def optimize_mesh(
         background = None
 
     # ==============================================================================================
-    #  Custom dataset (camera parameters, possibly random, possibly with images)
-    # ==============================================================================================
-    dataloader = data.get_dataloader(FLAGS.batch, FLAGS.custom_dataset, FLAGS.train_res)
-    dataloader_iterator = iter(dataloader)
-    dataset_has_images = dataloader.dataset.kind == data.DatasetKind.FIXED_CAMERAS_AND_IMAGES
-
-    SAVE_CAMERAS_AND_IMAGES = False
-    if SAVE_CAMERAS_AND_IMAGES:
-        cameras = []
-
-    # ==============================================================================================
     #  Training loop
     # ==============================================================================================
     img_cnt = 0
@@ -273,12 +277,18 @@ def optimize_mesh(
             # Render images, don't need to track any gradients
             with torch.no_grad():
                 # Center meshes
-                _opt_detail = mesh.center_by_reference(opt_detail_mesh.eval(params), ref_mesh_aabb, mesh_scale)
                 _opt_ref    = mesh.center_by_reference(render_ref_mesh.eval(params), ref_mesh_aabb, mesh_scale)
+                if dataset_has_images:
+                    _opt_detail = opt_detail_mesh.eval(params)
+                else:
+                    _opt_detail = mesh.center_by_reference(opt_detail_mesh.eval(params), ref_mesh_aabb, mesh_scale)
 
                 # Render
                 if FLAGS.subdivision > 0:
-                    _opt_base   = mesh.center_by_reference(opt_base_mesh.eval(params), ref_mesh_aabb, mesh_scale)
+                    if dataset_has_images:
+                        _opt_base = opt_base_mesh.eval(params)
+                    else:
+                        _opt_base   = mesh.center_by_reference(opt_base_mesh.eval(params), ref_mesh_aabb, mesh_scale)
                     img_base = render.render_mesh(glctx, _opt_base, a_mvp, a_campos, a_lightpos, FLAGS.light_power, FLAGS.display_res,
                         num_layers=FLAGS.layers, background=background, min_roughness=FLAGS.min_roughness)
                     img_base = util.scale_img_nhwc(img_base, [FLAGS.display_res, FLAGS.display_res])
@@ -313,7 +323,6 @@ def optimize_mesh(
         # ==============================================================================================
         #  Initialize training
         # ==============================================================================================
-
         iter_start_time = time.time()
         img_loss = torch.zeros([1], dtype=torch.float32, device='cuda')
         lap_loss = torch.zeros([1], dtype=torch.float32, device='cuda')
@@ -365,7 +374,10 @@ def optimize_mesh(
         #  Evaluate all mesh ops (may change when positions are modified etc) and center/align meshes
         # ==============================================================================================
         _opt_ref  = mesh.center_by_reference(render_ref_mesh.eval(params), ref_mesh_aabb, mesh_scale)
-        _opt_detail = mesh.center_by_reference(opt_detail_mesh.eval(params), ref_mesh_aabb, mesh_scale)
+        if dataset_has_images:
+            _opt_detail = opt_detail_mesh.eval()
+        else:
+            _opt_detail = mesh.center_by_reference(opt_detail_mesh.eval(params), ref_mesh_aabb, mesh_scale)
 
         # ==============================================================================================
         #  Render reference mesh (if not available from dataloader)

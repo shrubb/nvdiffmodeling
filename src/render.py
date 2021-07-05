@@ -134,7 +134,7 @@ def render_layer(
     gb_texc, gb_texc_deriv = interpolate(mesh.v_tex[None, ...], rast_out_s, mesh.t_tex_idx.int(), rast_db=rast_out_deriv_s)
 
     if ambient_only:
-        kd = mesh.material['kd'].sample(gb_texc, gb_texc_deriv)
+        kd = mesh.material['kd'].sample(gb_texc, gb_texc_deriv, filter_mode='linear')
         # Separate kd into alpha and color, default alpha = 1
         alpha = kd[..., 3:4] if kd.shape[-1] == 4 else torch.ones_like(kd[..., 0:1])
         kd = kd[..., 0:3]

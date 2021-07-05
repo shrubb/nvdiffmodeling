@@ -14,7 +14,7 @@ import nvdiffrast.torch as dr
 from . import util
 
 ########################################################################################################
-# Simple texture class. A texture can be either 
+# Simple texture class. A texture can be either
 # - A 3D tensor (using auto mipmaps)
 # - A list of 3D tensors (full custom mip hierarchy)
 ########################################################################################################
@@ -67,7 +67,7 @@ class Texture2D:
                 mip[...,2].clamp_(min=minB, max=maxB)
 
 ########################################################################################################
-# Helper function to create a trainable texture from a regular texture. The trainable weights are 
+# Helper function to create a trainable texture from a regular texture. The trainable weights are
 # initialized with texture data as an initial guess
 ########################################################################################################
 

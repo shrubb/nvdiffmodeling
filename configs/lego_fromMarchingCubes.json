@@ -1,0 +1,20 @@
+{
+    "out_dir": "lego_fromMarchingCubes",
+    "base_mesh": "data/lego/lego_100_0.985_SmartUV.obj",
+    "ref_mesh": "data/spot/spot.obj",
+    "custom_dataset": "data/lego",
+    "camera_eye": [ 3.1680095195770264, -2.1722869873046875, 1.2226545810699463 ],
+    "camera_up": [ 0.0, 0.0, 1.0 ],
+    "iter": 400,
+    "save_interval" :  100,
+    "log_interval" :  99,
+    "laplacian_factor": 1e3,
+    "texture_res": [ 1024, 1024 ],
+    "train_res": 800,
+    "batch": 8,
+    "learning_rate": 0.01,
+    "textures_init": "random",
+    "subdivision": 0,
+    "ambient_only": true,
+    "skip_train": ["position", "displacement"]
+}

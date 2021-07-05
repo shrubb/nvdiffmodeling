@@ -124,36 +124,57 @@ def segment_sum(data: torch.Tensor, segment_ids: torch.Tensor) -> torch.Tensor:
 # Projection and transformation matrix helpers.
 #----------------------------------------------------------------------------
 
-def projection(x=0.1, n=1.0, f=50.0):
-    return np.array([[n/x,    0,            0,              0], 
-                     [  0, n/-x,            0,              0], 
-                     [  0,    0, -(f+n)/(f-n), -(2*f*n)/(f-n)], 
+def projection(r=0.1, t=None, n=1.0, f=50.0):
+    """
+    Projection matrix for a symmetric frustum.
+    http://www.songho.ca/opengl/gl_projectionmatrix.html
+
+    r:
+        `float`
+        Half width of the frustum's near plane (rectangle).
+    t:
+        `float` or `None`
+        Negative half height of the frustum's near plane (rectangle).
+        If `None`, t = -r (square image).
+    n:
+        `float`
+        Distance to frustum's near plane.
+    f:
+        `float`
+        Distance to frustum's far plane.
+    """
+    if t is None:
+        t = -r
+
+    return np.array([[n/r,    0,            0,              0],
+                     [  0,  n/t,            0,              0],
+                     [  0,    0, -(f+n)/(f-n), -(2*f*n)/(f-n)],
                      [  0,    0,           -1,              0]]).astype(np.float32)
-                    
+
 def translate(x, y, z):
-    return np.array([[1, 0, 0, x], 
-                     [0, 1, 0, y], 
-                     [0, 0, 1, z], 
+    return np.array([[1, 0, 0, x],
+                     [0, 1, 0, y],
+                     [0, 0, 1, z],
                      [0, 0, 0, 1]]).astype(np.float32)
 
 def rotate_x(a):
     s, c = np.sin(a), np.cos(a)
-    return np.array([[1,  0, 0, 0], 
-                     [0,  c, s, 0], 
-                     [0, -s, c, 0], 
+    return np.array([[1,  0, 0, 0],
+                     [0,  c, s, 0],
+                     [0, -s, c, 0],
                      [0,  0, 0, 1]]).astype(np.float32)
 
 def rotate_y(a):
     s, c = np.sin(a), np.cos(a)
-    return np.array([[ c, 0, s, 0], 
-                     [ 0, 1, 0, 0], 
-                     [-s, 0, c, 0], 
+    return np.array([[ c, 0, s, 0],
+                     [ 0, 1, 0, 0],
+                     [-s, 0, c, 0],
                      [ 0, 0, 0, 1]]).astype(np.float32)
 
 def scale(s):
-    return np.array([[ s, 0, 0, 0], 
-                     [ 0, s, 0, 0], 
-                     [ 0, 0, s, 0], 
+    return np.array([[ s, 0, 0, 0],
+                     [ 0, s, 0, 0],
+                     [ 0, 0, s, 0],
                      [ 0, 0, 0, 1]]).astype(np.float32)
 
 def lookAt(eye, at, up):
@@ -163,13 +184,13 @@ def lookAt(eye, at, up):
     u = np.cross(b, w)
     u = u / np.linalg.norm(u)
     v = np.cross(w, u)
-    translate = np.array([[1, 0, 0, -eye[0]], 
-                          [0, 1, 0, -eye[1]], 
-                          [0, 0, 1, -eye[2]], 
+    translate = np.array([[1, 0, 0, -eye[0]],
+                          [0, 1, 0, -eye[1]],
+                          [0, 0, 1, -eye[2]],
                           [0, 0, 0, 1]]).astype(np.float32)
-    rotate =  np.array([[u[0], u[1], u[2], 0], 
-                        [v[0], v[1], v[2], 0], 
-                        [w[0], w[1], w[2], 0], 
+    rotate =  np.array([[u[0], u[1], u[2], 0],
+                        [v[0], v[1], v[2], 0],
+                        [w[0], w[1], w[2], 0],
                         [0, 0, 0, 1]]).astype(np.float32)
     return np.matmul(rotate, translate)
 
@@ -191,14 +212,14 @@ def lookAt(eye, at, up):
     u = u / np.linalg.norm(u)
     v = np.cross(w, u)
 
-    translate = np.array([[1, 0, 0, -eye[0]], 
-                          [0, 1, 0, -eye[1]], 
-                          [0, 0, 1, -eye[2]], 
+    translate = np.array([[1, 0, 0, -eye[0]],
+                          [0, 1, 0, -eye[1]],
+                          [0, 0, 1, -eye[2]],
                           [0, 0, 0, 1]]).astype(np.float32)
 
-    rotate =  np.array([[u[0], u[1], u[2], 0], 
-                        [v[0], v[1], v[2], 0], 
-                        [w[0], w[1], w[2], 0], 
+    rotate =  np.array([[u[0], u[1], u[2], 0],
+                        [v[0], v[1], v[2], 0],
+                        [w[0], w[1], w[2], 0],
                         [0, 0, 0, 1]]).astype(np.float32)
 
     return np.matmul(rotate, translate)
@@ -274,7 +295,7 @@ def cosine_sample_texture(res, N : np.ndarray) -> torch.Tensor:
 
 def bilinear_downsample(x : torch.tensor) -> torch.Tensor:
     w = torch.tensor([[1, 3, 3, 1], [3, 9, 9, 3], [3, 9, 9, 3], [1, 3, 3, 1]], dtype=torch.float32, device=x.device) / 64.0
-    w = w.expand(x.shape[-1], 1, 4, 4) 
+    w = w.expand(x.shape[-1], 1, 4, 4)
     x = torch.nn.functional.conv2d(x.permute(0, 3, 1, 2), w, padding=1, stride=2, groups=x.shape[-1])
     return x.permute(0, 2, 3, 1)
 
@@ -285,7 +306,7 @@ def bilinear_downsample(x : torch.tensor) -> torch.Tensor:
 def bilinear_downsample(x : torch.tensor, spp) -> torch.Tensor:
     w = torch.tensor([[1, 3, 3, 1], [3, 9, 9, 3], [3, 9, 9, 3], [1, 3, 3, 1]], dtype=torch.float32, device=x.device) / 64.0
     g = x.shape[-1]
-    w = w.expand(g, 1, 4, 4) 
+    w = w.expand(g, 1, 4, 4)
     x = x.permute(0, 3, 1, 2) # NHWC -> NCHW
     steps = int(np.log2(spp))
     for _ in range(steps):

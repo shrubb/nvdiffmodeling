@@ -4,6 +4,7 @@ import torch
 import numpy as np
 import cv2
 
+import math
 import enum
 from pathlib import Path
 import random
@@ -56,6 +57,7 @@ class MultiViewDataset(torch.utils.data.IterableDataset):
         if path is None:
             self.kind = DatasetKind.RANDOM_CAMERAS
             self.camera_matrices = None
+            self.projection_matrix = util.projection(r=0.4, f=1000.0)
         else:
             path = Path(path)
 
@@ -90,6 +92,13 @@ class MultiViewDataset(torch.utils.data.IterableDataset):
                 zip(*camera_matrices_file_iterator(cameras_path))
 
             self.camera_matrices = np.stack(self.camera_matrices)
+
+            # TODO read this from cameras.txt, don't hardcode
+            fov = 0.6911112070083618
+            self.projection_matrix = util.projection(r=math.tan(fov / 2), f=1000.0)
+
+    def get_projection_matrix(self):
+        return self.projection_matrix
 
     def __iter__(self):
         worker_info = torch.utils.data.get_worker_info()
