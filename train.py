@@ -52,6 +52,8 @@ def createLoss(FLAGS):
         return lambda img, ref: ru.image_loss(img, ref, loss='smape', tonemapper='none')
     elif FLAGS.loss == "mse":
         return lambda img, ref: ru.image_loss(img, ref, loss='mse', tonemapper='none')
+    elif FLAGS.loss == "l1":
+        return lambda img, ref: ru.image_loss(img, ref, loss='l1', tonemapper='none')
     elif FLAGS.loss == "logl1":
         return lambda img, ref: ru.image_loss(img, ref, loss='l1', tonemapper='log_srgb')
     elif FLAGS.loss == "logl2":
@@ -312,7 +314,8 @@ def optimize_mesh(
                     result_image.append(img_ref)
                 result_image = torch.cat(result_image, axis=2)
 
-            result_image[0] = util.tonemap_srgb(result_image[0])
+            if 'log' in FLAGS.loss:
+                result_image[0] = util.tonemap_srgb(result_image[0])
             np_result_image = result_image[0].cpu().numpy()
             if display_image:
                 util.display_image(np_result_image, size=FLAGS.display_res, title='%d / %d' % (it, FLAGS.iter))
@@ -375,7 +378,7 @@ def optimize_mesh(
         # ==============================================================================================
         _opt_ref  = mesh.center_by_reference(render_ref_mesh.eval(params), ref_mesh_aabb, mesh_scale)
         if dataset_has_images:
-            _opt_detail = opt_detail_mesh.eval()
+            _opt_detail = opt_detail_mesh.eval(params)
         else:
             _opt_detail = mesh.center_by_reference(opt_detail_mesh.eval(params), ref_mesh_aabb, mesh_scale)
 
@@ -388,7 +391,7 @@ def optimize_mesh(
                     spp=iter_spp, num_layers=1, background=randomBackground, min_roughness=FLAGS.min_roughness,
                     ambient_only=FLAGS.ambient_only_reference)
         else:
-            color_ref = color_ref + (1.0 - foreground_masks) * randomBackground
+            color_ref = foreground_masks * color_ref + (1.0 - foreground_masks) * randomBackground
 
         if SAVE_CAMERAS_AND_IMAGES:
             import cv2
@@ -402,7 +405,7 @@ def optimize_mesh(
         #  Render the trainable mesh
         # ==============================================================================================
         color_opt = render.render_mesh(glctx, _opt_detail, mvp, campos, lightpos, FLAGS.light_power, iter_res,
-            spp=iter_spp, num_layers=FLAGS.layers, msaa=True , background=randomBackground,
+            spp=iter_spp, num_layers=FLAGS.layers, msaa=True, background=randomBackground,
             min_roughness=FLAGS.min_roughness, ambient_only=FLAGS.ambient_only)
 
         # Debugging output

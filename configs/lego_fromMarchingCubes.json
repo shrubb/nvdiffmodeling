@@ -16,5 +16,6 @@
     "textures_init": "random",
     "subdivision": 0,
     "ambient_only": true,
+    "loss": "l1",
     "skip_train": ["position", "displacement"]
 }

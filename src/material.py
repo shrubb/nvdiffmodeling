@@ -18,7 +18,7 @@ from . import mesh
 # .mtl material format loading / storing
 ######################################################################################
 
-def load_mtl(fn, clear_ks=True):
+def load_mtl(fn, clear_ks=True, saved_as_srgb=False):
     import re
     mtl_path = os.path.dirname(fn)
 
@@ -50,7 +50,7 @@ def load_mtl(fn, clear_ks=True):
             mat['kd'] = texture.load_texture2D(os.path.join(mtl_path, mat['map_kd']))
         else:
             mat['kd'] = texture.Texture2D(mat['kd'])
-        
+
         if 'map_ks' in mat:
             mat['ks'] = texture.load_texture2D(os.path.join(mtl_path, mat['map_ks']), channels=3)
         else:
@@ -60,23 +60,25 @@ def load_mtl(fn, clear_ks=True):
             mat['normal'] = texture.load_texture2D(os.path.join(mtl_path, mat['bump']), lambda_fn=lambda x: x * 2 - 1, channels=3)
 
         # Convert Kd from sRGB to linear RGB
-        mat['kd'] = texture.srgb_to_rgb(mat['kd'])
+        if saved_as_srgb:
+            mat['kd'] = texture.srgb_to_rgb(mat['kd'])
 
         if clear_ks:
             # Override ORM occlusion (red) channel by zeros. We hijack this channel
             for mip in mat['ks'].getMips():
-                mip[..., 0] = 0.0 
+                mip[..., 0] = 0.0
 
     return materials
 
-def save_mtl(fn, material):
+def save_mtl(fn, material, save_as_srgb=False):
     folder = os.path.dirname(fn)
     with open(fn, "w") as f:
         f.write('newmtl defaultMat\n')
         if material is not None:
             f.write('bsdf   %s\n' % material['bsdf'])
             f.write('map_kd texture_kd.png\n')
-            texture.save_texture2D(os.path.join(folder, 'texture_kd.png'), texture.rgb_to_srgb(material['kd']))
+            kd = texture.rgb_to_srgb(material['kd']) if save_as_srgb else material['kd']
+            texture.save_texture2D(os.path.join(folder, 'texture_kd.png'), kd)
             f.write('map_ks texture_ks.png\n')
             texture.save_texture2D(os.path.join(folder, 'texture_ks.png'), material['ks'])
             f.write('bump texture_n.png\n')
@@ -117,7 +119,7 @@ def merge_materials(materials, texcoords, tfaces, mfaces):
         for tex in textures:
             tex_res = np.array(mat[tex].getRes()) if tex in mat else np.array([1, 1])
             max_res = np.maximum(max_res, tex_res) if max_res is not None else tex_res
-    
+
     # Compute size of compund texture and round up to nearest PoT
     full_res = 2**np.ceil(np.log2(max_res * np.array([1, len(materials)]))).astype(np.int)
 
