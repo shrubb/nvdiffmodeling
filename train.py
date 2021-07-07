@@ -29,6 +29,7 @@ from src import render
 from src import regularizer
 from src import data
 from src.mesh import Mesh
+from src.radam import RAdam
 
 # Enable to debug back-prop anomalies
 # torch.autograd.set_detect_anomaly(True)
@@ -230,7 +231,8 @@ def optimize_mesh(
     #  Setup torch optimizer
     # ==============================================================================================
 
-    optimizer  = torch.optim.Adam(trainable_list, lr=FLAGS.learning_rate)
+    optimizer_class = RAdam if FLAGS.use_radam else torch.optim.Adam
+    optimizer = optimizer_class(trainable_list, lr=FLAGS.learning_rate)
 
     scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=lambda x: max(0.0, 10**(-x*0.0002)))
 
@@ -513,6 +515,7 @@ def main():
     parser.add_argument('-si', '--save_interval', type=int, default=1000)
     parser.add_argument('--log_interval', type=int, default=40)
     parser.add_argument('-lr', '--learning_rate', type=float, default=0.01)
+    parser.add_argument('--use_radam', action='store_true', default=False)
     parser.add_argument('-lp', '--light_power', type=float, default=5.0)
     parser.add_argument('-mr', '--min_roughness', type=float, default=0.08)
     parser.add_argument('-sd', '--subdivision', type=int, default=0)
