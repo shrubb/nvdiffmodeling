@@ -4,6 +4,7 @@ import torch
 import numpy as np
 import cv2
 
+import json
 import math
 import enum
 from pathlib import Path
@@ -24,40 +25,47 @@ class MultiViewDataset(torch.utils.data.IterableDataset):
     or
     `(<camera matrix Rt>, <image>, <foreground mask>)`.
     """
-    def __init__(self, path=None, resolution=512):
+    def __init__(self, path=None, resolution=None):
         """
         path:
             `None` or convertible to `pathlib.Path`
             - If `None`, sample cameras randomly, don't yield images.
             - If path to a file, yield cameras from that file, don't yield images.
-            - If path to a directory, yield cameras from "`path`/cameras.txt" and yield
-              images from that directory. Images have to be square (for now).
+            - If path to a directory, yield cameras from "`path`/cameras.json" and yield
+              images from that directory.
 
-            In two last cases, the file format is:
-                front.jpg
-                2.5 0.0 0.0 0.0
-                0.0 1.0 0.0 0.0
-                0.0 0.0 1.0 -3.0
-                0.0 0.0 0.0 1.0
-                side_1.png
-                1.0 0.0 0.0 0.0
-                0.0 -1.0 0.0 0.0
-                0.0 0.0 1.0 2.0
-                0.0 0.0 0.0 1.0
-                <etc.>
-            When images aren't to be loaded, put empty lines in place of file names.
+            In two last cases, the file format is as https://github.com/shrubb/nerf-pytorch
+            (see load_blender.py). Example:
+            {
+                "image_height": 378,
+                "image_width": 504,
+                "camera_angle_x": 1.088803798681739,
+                "camera_angle_y": 0.8524697440569041,
+                "frames": [
+                    {
+                        "file_path": "./000.png",
+                        "rotation": 0.012566370614359171,
+                        "transform_matrix": [
+                            [
+                                0.9987568259239197,
+                                0.011033710092306137,
+                                0.04861102253198624,
+                                0.18809327483177185
+                            ],
+                            ...
 
         resolution:
             `int`
-            When `path` is set up to load images, sets size (square side) of these images.
-            No effect otherwise.
+            Not yet supported.
+            (When `path` is set up to load images, ...)
         """
-        self.resolution = int(resolution)
-
         if path is None:
             self.kind = DatasetKind.RANDOM_CAMERAS
             self.camera_matrices = None
             self.projection_matrix = util.projection(r=0.4, f=1000.0)
+
+            assert resolution is not None, "Training resolution not specified in config"
+            self.resolution = resolution
         else:
             path = Path(path)
 
@@ -65,40 +73,51 @@ class MultiViewDataset(torch.utils.data.IterableDataset):
                 self.kind = DatasetKind.FIXED_CAMERAS
                 cameras_path = path
                 self.images_root = None
-            elif (path / "cameras.txt").is_file():
+            elif (path / "cameras.json").is_file():
                 self.kind = DatasetKind.FIXED_CAMERAS_AND_IMAGES
-                cameras_path = path / "cameras.txt"
+                cameras_path = path / "cameras.json"
                 self.images_root = path
             else:
-                raise FileNotFoundError(f"No '{path}' and '{path / 'cameras.txt'}'")
+                raise FileNotFoundError(f"No '{path}' and '{path / 'cameras.json'}'")
 
-            def camera_matrices_file_iterator(cameras_path):
-                with open(cameras_path, 'r') as cameras_file:
-                    while True:
-                        image_file_name = cameras_file.readline()
-                        if not image_file_name: # EOF
-                            return
-                        image_file_name = image_file_name.strip()
+            def load_blender_poses(path):
+                with open(path, 'r') as f:
+                    metadata = json.load(f)
 
-                        camera_matrix = np.fromstring(
-                            ''.join(cameras_file.readline() for _ in range(4)),
-                            sep=' ', dtype=np.float32)
-                        assert camera_matrix.size == 4 * 4, f"File format error: {path}"
-                        camera_matrix = camera_matrix.reshape(4, 4)
+                W = metadata.get('image_width', 800)
+                H = metadata.get('image_height', W)
+                camera_angle_x = metadata['camera_angle_x']
+                camera_angle_y = metadata.get('camera_angle_y', camera_angle_x)
 
-                        yield camera_matrix, image_file_name
+                camera_poses = [
+                    np.linalg.inv(frame['transform_matrix']) for frame in metadata['frames']]
+                camera_poses = np.float32(camera_poses)
 
-            self.camera_matrices, self.image_paths = \
-                zip(*camera_matrices_file_iterator(cameras_path))
+                image_names = [frame['file_path'] for frame in metadata['frames']]
 
-            self.camera_matrices = np.stack(self.camera_matrices)
+                return image_names, camera_poses, camera_angle_x, camera_angle_y, H, W
 
-            # TODO read this from cameras.txt, don't hardcode
-            fov = 0.6911112070083618
-            self.projection_matrix = util.projection(r=math.tan(fov / 2), f=1000.0)
+            self.image_paths, self.camera_matrices, fov_x, fov_y, H, W = \
+                load_blender_poses(cameras_path)
+
+            if self.kind == DatasetKind.FIXED_CAMERAS_AND_IMAGES and resolution is not None:
+                raise NotImplementedError("Custom training images resolution specified in config")
+            self.resolution = (H, W)
+
+            self.projection_matrix = util.projection(
+                r=math.tan(fov_x / 2), t=-math.tan(fov_y / 2), f=1000.0)
+
+    def get_optimal_num_workers(self):
+        if self.camera_matrices is None:
+            return 2
+        else:
+            return min(4, len(self.camera_matrices))
 
     def get_projection_matrix(self):
         return self.projection_matrix
+
+    def get_resolution(self):
+        return self.resolution
 
     def __iter__(self):
         worker_info = torch.utils.data.get_worker_info()
@@ -134,15 +153,10 @@ class MultiViewDataset(torch.utils.data.IterableDataset):
                         # ...or along with images.
                         image = cv2.imread(
                             str(self.images_root / self.image_paths[i]), cv2.IMREAD_UNCHANGED)
-                        if image.shape[0] != image.shape[1]:
-                            raise NotImplementedError(
-                                f"Non-square images not supported yet: {self.image_paths[i]}")
 
-                        if image.shape[0] != self.resolution:
+                        if image.shape[:2] != self.resolution:
                             image = cv2.resize(
-                                image,
-                                (self.resolution, self.resolution),
-                                interpolation=cv2.INTER_CUBIC)
+                                image, self.resolution, interpolation=cv2.INTER_CUBIC)
 
                         if image.shape[2] == 4:
                             image, foreground_mask = image[..., :3], image[..., 3:]
@@ -168,6 +182,8 @@ def get_dataloader(batch_size, path, resolution):
         np.random.seed(worker_id)
         torch.manual_seed(worker_id)
 
+    dataset = MultiViewDataset(path, resolution)
+
     return torch.utils.data.DataLoader(
-        MultiViewDataset(path, resolution), batch_size=batch_size,
-        num_workers=4, worker_init_fn=worker_init_fn)
+        dataset, batch_size=batch_size,
+        num_workers=dataset.get_optimal_num_workers(), worker_init_fn=worker_init_fn)

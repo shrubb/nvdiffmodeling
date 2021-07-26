@@ -14,14 +14,14 @@ from . import util
 from . import texture
 
 ######################################################################################
-# Computes the avergage edge length of a mesh. 
+# Computes the avergage edge length of a mesh.
 # Rough estimate of the tessellation of a mesh. Can be used e.g. to clamp gradients
 ######################################################################################
 def avg_edge_length(opt_mesh):
     with torch.no_grad():
         opt_mesh = opt_mesh.eval()
         nVerts = opt_mesh.v_pos.shape[0]
-        t_pos_idx = opt_mesh.t_pos_idx.detach().cpu().numpy() 
+        t_pos_idx = opt_mesh.t_pos_idx.detach().cpu().numpy()
 
         # Find unique edges
         ix_i = []
@@ -49,16 +49,16 @@ def avg_edge_length(opt_mesh):
         return (torch.sum(term) / len(x_i)).item()
 
 ######################################################################################
-# Edge length regularizer 
+# Edge length regularizer
 ######################################################################################
 def edge_length_regularizer(mesh):
     class mesh_op_edge_length_regularizer:
         def __init__(self, mesh):
             self.mesh = mesh
-            
+
             mesh = mesh.eval()
             nVerts = mesh.v_pos.shape[0]
-            t_pos_idx = mesh.t_pos_idx.detach().cpu().numpy() 
+            t_pos_idx = mesh.t_pos_idx.detach().cpu().numpy()
 
             # Find unique edges
             ix_i = []
@@ -101,7 +101,7 @@ def laplace_regularizer_const(opt_mesh, base_mesh=None):
 
             opt_mesh = opt_mesh.eval()
             self.nVerts = opt_mesh.v_pos.shape[0]
-            t_pos_idx = opt_mesh.t_pos_idx.detach().cpu().numpy() 
+            t_pos_idx = opt_mesh.t_pos_idx.detach().cpu().numpy()
 
             # Build vertex neighbor rings
             vtx_n = [[] for _ in range(self.nVerts)]
@@ -142,9 +142,9 @@ def laplace_regularizer_const(opt_mesh, base_mesh=None):
 
             # Sum everyhing
             term = util.segment_sum(term, self.ix_i)
-            
+
             return torch.mean(term**2)
-    
+
     return mesh_op_laplace_regularizer_const(opt_mesh, base_mesh)
 
 ######################################################################################
@@ -157,7 +157,7 @@ def face_normal_regularizer(opt_mesh):
 
             imesh = opt_mesh.eval()
             self.nVerts = imesh.v_pos.shape[0]
-            t_pos_idx = imesh.t_pos_idx.detach().cpu().numpy() 
+            t_pos_idx = imesh.t_pos_idx.detach().cpu().numpy()
 
             # Generate edge lists
             edge_tris = {}
@@ -193,5 +193,5 @@ def face_normal_regularizer(opt_mesh):
             term = (1.0 - term) * 0.5
 
             return torch.mean(torch.abs(term))
-    
+
     return mesh_op_face_normal_regularizer(opt_mesh)

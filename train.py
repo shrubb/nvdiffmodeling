@@ -89,9 +89,11 @@ def optimize_mesh(
     # Projection matrix; for now, only constant matrix is supported
     proj_mtx = dataloader.dataset.get_projection_matrix()
 
-    SAVE_CAMERAS_AND_IMAGES = False
-    if SAVE_CAMERAS_AND_IMAGES:
-        cameras = []
+    # Dynamic defaults
+    if FLAGS.train_res is None:
+        FLAGS.train_res = dataloader.dataset.get_resolution()
+    if FLAGS.display_res is None:
+        FLAGS.display_res = FLAGS.train_res
 
     # Reference mesh
     ref_mesh = load_mesh(FLAGS.ref_mesh, FLAGS.mtl_override)
@@ -245,7 +247,7 @@ def optimize_mesh(
     if FLAGS.background == 'checker':
         background = torch.tensor(util.checkerboard(FLAGS.display_res, 8), dtype=torch.float32, device='cuda')
     elif FLAGS.background == 'white':
-        background = torch.ones((1, FLAGS.display_res, FLAGS.display_res, 3), dtype=torch.float32, device='cuda')
+        background = torch.ones((1, *FLAGS.display_res, 3), dtype=torch.float32, device='cuda')
     else:
         background = None
 
@@ -275,7 +277,7 @@ def optimize_mesh(
             a_lightpos = np.linalg.inv(a_mv)[None, :3, 3]
             a_campos = np.linalg.inv(a_mv)[None, :3, 3]
 
-            params = {'mvp' : a_mvp, 'lightpos' : a_lightpos, 'campos' : a_campos, 'resolution' : [FLAGS.display_res, FLAGS.display_res],
+            params = {'mvp' : a_mvp, 'lightpos' : a_lightpos, 'campos' : a_campos, 'resolution' : FLAGS.display_res,
             'time' : 0}
 
             # Render images, don't need to track any gradients
@@ -295,7 +297,7 @@ def optimize_mesh(
                         _opt_base   = mesh.center_by_reference(opt_base_mesh.eval(params), ref_mesh_aabb, mesh_scale)
                     img_base = render.render_mesh(glctx, _opt_base, a_mvp, a_campos, a_lightpos, FLAGS.light_power, FLAGS.display_res,
                         num_layers=FLAGS.layers, background=background, min_roughness=FLAGS.min_roughness)
-                    img_base = util.scale_img_nhwc(img_base, [FLAGS.display_res, FLAGS.display_res])
+                    img_base = util.scale_img_nhwc(img_base, FLAGS.display_res)
 
                 img_opt = render.render_mesh(glctx, _opt_detail, a_mvp, a_campos, a_lightpos, FLAGS.light_power, FLAGS.display_res,
                     num_layers=FLAGS.layers, background=background, min_roughness=FLAGS.min_roughness, ambient_only=FLAGS.ambient_only)
@@ -306,8 +308,8 @@ def optimize_mesh(
                 tensorboard_writer.add_scalar(f"{FLAGS.loss}, validation", val_img_loss, it)
 
                 # Rescale
-                img_opt  = util.scale_img_nhwc(img_opt,  [FLAGS.display_res, FLAGS.display_res])
-                img_ref  = util.scale_img_nhwc(img_ref,  [FLAGS.display_res, FLAGS.display_res])
+                img_opt  = util.scale_img_nhwc(img_opt, FLAGS.display_res)
+                img_ref  = util.scale_img_nhwc(img_ref, FLAGS.display_res)
 
                 result_image = [img_opt]
                 if FLAGS.subdivision > 0:
@@ -336,8 +338,11 @@ def optimize_mesh(
         iter_spp = FLAGS.spp
         if FLAGS.random_train_res:
             # Random resolution, 16x16 -> train_res. Scale up sample count so we always land close to train_res*samples_per_pixel samples
-            iter_res = np.random.randint(16, FLAGS.train_res+1)
-            iter_spp = FLAGS.spp * (FLAGS.train_res // iter_res)
+            import random
+            iter_width = random.randint(16, FLAGS.train_res[1])
+            iter_height = round(FLAGS.train_res[0] * (iter_width / FLAGS.train_res[1]))
+            iter_res = (iter_height, iter_width)
+            iter_spp = FLAGS.spp * (FLAGS.train_res[1] // iter_res[1])
 
         # ==============================================================================================
         #  Build transform stack for minibatching
@@ -368,11 +373,11 @@ def optimize_mesh(
                 lightpos_sample[:] = torch.as_tensor(
                     util.cosine_sample(campos_sample.numpy()) * data.RADIUS)
 
-        params = {'mvp' : mvp, 'lightpos' : lightpos, 'campos' : campos, 'resolution' : [iter_res, iter_res], 'time' : 0}
+        params = {'mvp' : mvp, 'lightpos' : lightpos, 'campos' : campos, 'resolution' : iter_res, 'time' : 0}
 
         # Random bg color
         randomBgMean = torch.rand(FLAGS.batch, 1, 1, 3, device='cuda')
-        randomBgNoise = torch.rand(FLAGS.batch, iter_res, iter_res, 3, device='cuda')
+        randomBgNoise = torch.rand(FLAGS.batch, *iter_res, 3, device='cuda')
         randomBackground = (randomBgMean + randomBgNoise * 0.1).clamp(0, 1)
 
         # ==============================================================================================
@@ -394,14 +399,6 @@ def optimize_mesh(
                     ambient_only=FLAGS.ambient_only_reference)
         else:
             color_ref = foreground_masks * color_ref + (1.0 - foreground_masks) * randomBackground
-
-        if SAVE_CAMERAS_AND_IMAGES:
-            import cv2
-            img = (color_ref[0].cpu().numpy() * 255.0).round().astype(np.uint8)
-            cv2.cvtColor(img, cv2.COLOR_BGR2RGB, dst=img)
-            cv2.imwrite("data/spot-40FixedViews/%03d.png" % it, img)
-
-            cameras.append(r_mv)
 
         # ==============================================================================================
         #  Render the trainable mesh
@@ -486,10 +483,6 @@ def optimize_mesh(
             # Save final mesh to file
             obj.write_obj(os.path.join(out_dir, "mesh/"), opt_detail_mesh.eval())
 
-    if SAVE_CAMERAS_AND_IMAGES:
-        cameras = torch.cat(cameras).numpy()
-        from generate_camera_matrices import write_cameras_to_file
-        write_cameras_to_file(cameras, "data/spot-40FixedViews/cameras.txt", ["%03d.png" % i for i in range(len(cameras))])
 
 #----------------------------------------------------------------------------
 # Main function.
@@ -507,7 +500,7 @@ def main():
     parser.add_argument('-b', '--batch', type=int, default=1)
     parser.add_argument('-s', '--spp', type=int, default=1)
     parser.add_argument('-l', '--layers', type=int, default=1)
-    parser.add_argument('-r', '--train_res', type=int, default=512)
+    parser.add_argument('-r', '--train_res', nargs=2, type=int, default=None, help="List of two ints")
     parser.add_argument('-rtr', '--random_train_res', action='store_true', default=False)
     parser.add_argument('-dr', '--display_res', type=int, default=None)
     parser.add_argument('-tr', '--texture_res', nargs=2, type=int, default=[1024, 1024])
@@ -558,10 +551,6 @@ def main():
                 if key not in FLAGS:
                     raise KeyError(f"Unknown keyword '{key}' in config file")
                 FLAGS.__dict__[key] = new_data[key]
-
-    # Dynamic defaults
-    if FLAGS.display_res is None:
-        FLAGS.display_res = FLAGS.train_res
 
     if FLAGS.out_dir is None:
         FLAGS.out_dir = 'debug'

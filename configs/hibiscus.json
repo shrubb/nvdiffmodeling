@@ -10,7 +10,7 @@
     "batch" : 8,
     "learning_rate" : 0.01,
     "loss" : "mse",
-    "train_res" : 512,
+    "train_res" : [512, 512],
     "layers": 8,
     "iter" : 5000,
     "custom_mip": true,

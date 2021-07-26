@@ -102,8 +102,8 @@ def render_layer(
 
     # Scale down to shading resolution when MSAA is enabled, otherwise shade at full resolution
     if spp > 1 and msaa:
-        rast_out_s = util.scale_img_nhwc(rast, [resolution, resolution], mag='nearest', min='nearest')
-        rast_out_deriv_s = util.scale_img_nhwc(rast_deriv, [resolution, resolution], mag='nearest', min='nearest') * spp
+        rast_out_s = util.scale_img_nhwc(rast, resolution, mag='nearest', min='nearest')
+        rast_out_deriv_s = util.scale_img_nhwc(rast_deriv, resolution, mag='nearest', min='nearest') * spp
     else:
         rast_out_s = rast
         rast_out_deriv_s = rast_deriv
@@ -154,7 +154,7 @@ def render_layer(
 
     # Scale back up to visibility resolution if using MSAA
     if spp > 1 and msaa:
-        color = util.scale_img_nhwc(color, [full_res, full_res], mag='nearest', min='nearest')
+        color = util.scale_img_nhwc(color, full_res, mag='nearest', min='nearest')
 
     # Return color & raster output for peeling
     return color
@@ -200,19 +200,19 @@ def render_mesh(
 
     # Render all layers front-to-back
     layers = []
-    with dr.DepthPeeler(ctx, v_pos_clip, mesh.t_pos_idx.int(), [resolution*spp, resolution*spp]) as peeler:
+    with dr.DepthPeeler(ctx, v_pos_clip, mesh.t_pos_idx.int(), full_res) as peeler:
         for _ in range(num_layers):
             rast, db = peeler.rasterize_next_layer()
             layers += [(render_layer(rast, db, mesh, view_pos, light_pos, light_power, resolution, min_roughness, spp, msaa, ambient_only), rast)]
 
     # Clear to background layer
     if background is not None:
-        assert background.shape[1] == resolution and background.shape[2] == resolution
+        assert background.shape[1:3] == tuple(resolution)
         if spp > 1:
-            background = util.scale_img_nhwc(background, [full_res, full_res], mag='nearest', min='nearest')
+            background = util.scale_img_nhwc(background, full_res, mag='nearest', min='nearest')
         accum_col = background
     else:
-        accum_col = torch.zeros(size=(1, full_res, full_res, 3), dtype=torch.float32, device='cuda')
+        accum_col = torch.zeros(size=(1, *full_res, 3), dtype=torch.float32, device='cuda')
 
     # Composite BACK-TO-FRONT
     for color, rast in reversed(layers):

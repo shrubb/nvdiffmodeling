@@ -13,7 +13,7 @@ def write_cameras_to_txt(cameras, path, names=None):
     TODO: migrate nvdiffmodeling to json.
     """
     if names is None:
-        names = [""] * len(cameras)
+        names = [f"./{idx:03}.png" for idx in range(len(cameras))]
 
     with open(path, 'w') as f:
         for camera, name in zip(cameras, names):
@@ -26,10 +26,11 @@ def write_cameras_to_json(cameras, path, names=None):
     Write camera transformations to disk in 'nerf-pytorch''s "blender" json format.
     """
     output_json = {
+        "image_width": 800,
         "camera_angle_x": 0.6911112070083618, # field of view, a hardcoded default
         "frames": [
             {
-                "file_path": names[idx] if names is not None else "",
+                "file_path": names[idx] if names is not None else f"./{idx:03}.png",
                 "rotation": 0.012566370614359171, # don't know what this is, took it from lego
                 "transform_matrix": np.linalg.inv(camera).tolist()
             } for idx, camera in enumerate(cameras)

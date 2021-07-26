@@ -6,7 +6,7 @@
     "save_interval" : 1000,
     "random_textures" : false,
     "texture_res" : [2048, 2048],
-    "train_res" : 512,
+    "train_res" : [512, 512],
     "batch": 8,
     "learning_rate" : 0.01,
     "skip_train": ["kd", "ks"],

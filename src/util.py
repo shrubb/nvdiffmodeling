@@ -329,7 +329,7 @@ def display_image(image, zoom=None, size=None, title=None): # HWC
     image = np.asarray(image)
     if size is not None:
         assert zoom is None
-        zoom = max(1, size // image.shape[0])
+        zoom = max(1, size[0] // image.shape[0])
     if zoom is not None:
         image = image.repeat(zoom, axis=0).repeat(zoom, axis=1)
     height, width, channels = image.shape
@@ -389,7 +389,14 @@ def time_to_text(x):
 
 #----------------------------------------------------------------------------
 
-def checkerboard(width, repetitions) -> np.ndarray:
-    tilesize = int(width//repetitions//2)
-    check = np.kron([[1, 0] * repetitions, [0, 1] * repetitions] * repetitions, np.ones((tilesize, tilesize)))*0.33 + 0.33
-    return np.stack((check, check, check), axis=-1)[None, ...]
+def checkerboard(size, repetitions_w) -> np.ndarray:
+    height, width = size
+    double_tile_size = (width + repetitions_w - 1) // repetitions_w
+    tile_size = (double_tile_size + 1) // 2
+    repetitions_h = (height + tile_size - 1) // tile_size
+    retval = np.kron(
+        [[1, 0] * repetitions_w, [0, 1] * repetitions_w] * repetitions_h,
+        np.ones((tile_size, tile_size))) * 0.33 + 0.33
+    retval = retval[None, :height, :width, None]
+    retval = np.broadcast_to(retval , (1, height, width, 3))
+    return retval
