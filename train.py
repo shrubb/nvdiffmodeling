@@ -77,6 +77,9 @@ def optimize_mesh(
 
     os.makedirs(out_dir, exist_ok=True)
     os.makedirs(os.path.join(out_dir, "mesh"), exist_ok=True)
+    if FLAGS.config is not None:
+        import shutil
+        shutil.copy2(FLAGS.config, out_dir + '/config.json')
     tensorboard_writer = SummaryWriter(out_dir)
 
     # ==============================================================================================
